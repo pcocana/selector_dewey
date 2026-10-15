@@ -66,6 +66,12 @@ select,input[type=text],input[type=number],input[type=search]{background:var(--s
 .opt{display:flex;gap:8px;align-items:flex-start;font-size:13px}
 .opt input{margin-top:3px}
 .hint{font-size:12px;color:var(--muted);margin:0}
+.typehead{display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap}
+.ghost.sm{padding:3px 8px;font-size:12px}
+.typelist{display:flex;flex-direction:column;gap:6px;max-height:190px;overflow:auto;border:1px solid var(--line);border-radius:4px;padding:8px 10px;background:var(--surface-2)}
+.typelist .opt{justify-content:space-between;align-items:center}
+.typelist .opt label{display:flex;gap:8px;align-items:center;min-width:0;cursor:pointer;overflow-wrap:anywhere}
+.typelist .cnt{font:12px var(--font-mono);color:var(--muted);font-variant-numeric:tabular-nums;white-space:nowrap}
 .msg{font-size:13px;margin:0;color:var(--muted)}
 .msg.warn{color:var(--warn)}
 
@@ -155,6 +161,13 @@ tbody tr.sel{background:var(--sel)}
         <label class="f">Mención de edición (opcional)<select id="selEdition"></select></label>
         <label class="f">Ejemplares (opcional)<select id="selCopies"></select></label>
         <p class="hint">Sin columna de ejemplares, cada fila cuenta como un ejemplar.</p>
+        <label class="f">Tipo de recurso (opcional)<select id="selType"></select></label>
+        <div id="typeBox" hidden>
+          <div class="typehead"><h3>Recursos a incluir</h3>
+            <span><button class="ghost sm" id="typeAll" type="button">Todos</button> <button class="ghost sm" id="typeNone" type="button">Ninguno</button></span></div>
+          <div class="typelist" id="typeList"></div>
+          <p class="hint" id="typeHint"></p>
+        </div>
       </section>
 
       <section class="step">
@@ -300,6 +313,18 @@ function parseCopies(v){
   if(!(n>0)) return 1;
   return n>MAX_COPIES?1:n;
 }
+function typeKey(v){return String(v==null?'':v).replace(/\s+/g,' ').trim();}
+function typeCounts(rows,c){
+  const m=new Map();
+  for(const r of rows){const k=typeKey(r[c]);m.set(k,(m.get(k)||0)+1);}
+  return [...m.entries()].sort((a,b)=>b[1]-a[1]||a[0].localeCompare(b[0],'es'));
+}
+function defaultTypes(list){
+  const norm=k=>stripAccents(k).toLowerCase();
+  let hit=list.filter(([k])=>/^(libros?|books?|bk|monografias?)$/.test(norm(k)));
+  if(!hit.length) hit=list.filter(([k])=>/^(libros?|books?)\b/.test(norm(k))&&!/electr|digital|e-?book/.test(norm(k)));
+  return new Set((hit.length?hit:list).map(([k])=>k));
+}
 function looksLikeCount(rows,c){
   let ok=0,tot=0;
   for(let i=0;i<Math.min(rows.length,300);i++){
@@ -312,10 +337,11 @@ function looksLikeCount(rows,c){
 function compareDewey(a,b){return a.n-b.n||a.title.localeCompare(b.title,'es');}
 
 function processRows(rows,cols,opts){
-  const stats={rows:rows.length,withDewey:0,inRange:0,noTitle:0,copies:0,noYearCopies:0};
+  const stats={rows:rows.length,withDewey:0,inRange:0,noTitle:0,copies:0,noYearCopies:0,excludedType:0};
   const map=new Map(); const keptIdx=[];
   for(let i=0;i<rows.length;i++){
     const r=rows[i];
+    if(cols.type>=0&&opts.types&&!opts.types.has(typeKey(r[cols.type]))){stats.excludedType++;continue;}
     const d=parseDewey(r[cols.dewey]);
     if(!d) continue;
     stats.withDewey++;
@@ -424,6 +450,8 @@ function buildWorkbook(XLSX,d){
     ['Filas leídas',d.stats.rows],['Filas con Dewey válido',d.stats.withDewey],['Filas dentro del rango',d.stats.inRange],
     ['Filas sin título (omitidas)',d.stats.noTitle],['Ejemplares sin año de edición',d.stats.noYearCopies],
     ['Año promedio ponderado por ejemplares','Cada edición pesa por su número de ejemplares'],
+    ['Tipos de recurso incluidos',d.typesText||'Todos (sin filtro por tipo)'],
+    ['Filas excluidas por tipo de recurso',d.stats.excludedType||0],
     ['Fecha',d.date]];
   const add=(name,aoa,widths)=>{const ws=XLSX.utils.aoa_to_sheet(aoa);ws['!cols']=widths.map(w=>({wch:w}));
     if(aoa.length>1&&aoa[0].length) ws['!autofilter']={ref:XLSX.utils.encode_range({s:{r:0,c:0},e:{r:aoa.length-1,c:aoa[0].length-1}})};
@@ -465,6 +493,10 @@ function guessColumns(headers,rows){
   out.author=find(/autor|author|creador|responsable/,used); if(out.author>=0) used.push(out.author);
   out.year=find(/^a[nñ]o|year|copyright|fecha.*(pub|edic)|publicaci|\banio\b/,used); if(out.year>=0) used.push(out.year);
   out.edition=find(/edicion|edition|mencion/,used); if(out.edition>=0) used.push(out.edition);
+  out.type=-1;
+  for(const re of [/tipo.*(recurso|material|documento|item|ejemplar)|(recurso|material|documento).*tipo/,/item.?type|itemtype|^tipo|recurso|material|formato|soporte/]){
+    const t=find(re,used); if(t>=0){out.type=t;used.push(t);break;}
+  }
   out.copies=-1;
   const skip=used.slice();
   for(let guard=0;guard<H.length;guard++){
@@ -542,7 +574,22 @@ function splitSheet(aoa,hdrRow){
     fillSelect('#selYear',true,guess?g.year:null);
     fillSelect('#selEdition',true,guess?g.edition:null);
     fillSelect('#selCopies',true,guess?g.copies:null);
+    fillSelect('#selType',true,guess?g.type:null);
+    refreshTypes();
     run();
+  }
+  function refreshTypes(){
+    const c=+$('#selType').value;
+    const box=$('#typeBox');
+    if(!(c>=0)||!S.rows.length){S.typeSel=null;box.hidden=true;return;}
+    S.typeList=typeCounts(S.rows,c);
+    S.typeSel=defaultTypes(S.typeList);
+    box.hidden=false;drawTypes();
+  }
+  function drawTypes(){
+    $('#typeList').innerHTML=S.typeList.map(([k,n],i)=>'<div class="opt"><label><input type="checkbox" data-i="'+i+'"'+(S.typeSel.has(k)?' checked':'')+'><span>'+esc(k||'(sin tipo)')+'</span></label><span class="cnt">'+fmt(n)+'</span></div>').join('');
+    const sel=S.typeList.filter(([k])=>S.typeSel.has(k)).reduce((s,[,n])=>s+n,0);
+    $('#typeHint').textContent=fmt(sel)+' de '+fmt(S.rows.length)+' filas con los tipos marcados.';
   }
   function fillSelect(sel,optional,val){
     const el=$(sel);const prev=el.value;
@@ -555,7 +602,7 @@ function splitSheet(aoa,hdrRow){
 
   /* ---------- proceso ---------- */
   function schedule(){clearTimeout(S.timer);S.timer=setTimeout(run,120);}
-  function cols(){return {dewey:+$('#selDewey').value,title:+$('#selTitle').value,author:+$('#selAuthor').value,year:+$('#selYear').value,edition:+$('#selEdition').value,copies:+$('#selCopies').value};}
+  function cols(){return {dewey:+$('#selDewey').value,title:+$('#selTitle').value,author:+$('#selAuthor').value,year:+$('#selYear').value,edition:+$('#selEdition').value,copies:+$('#selCopies').value,type:+$('#selType').value};}
   function run(){
     if(!S.rows.length&&!S.headers.length) return;
     $('#empty').hidden=true;$('#out').hidden=false;
@@ -569,7 +616,9 @@ function splitSheet(aoa,hdrRow){
     const byAuthor=document.querySelector('input[name=uniq]:checked').value==='author'&&c.author>=0;
     S.byAuthor=byAuthor;S.from=from;S.to=to;
     const toEff=/^\s*\d+\s*$/.test($('#to').value)?to+0.999999:to;
-    const res=processRows(S.rows,c,{from,to:toEff,byAuthor});
+    const types=c.type>=0&&S.typeSel?S.typeSel:null;
+    S.typesText=types?S.typeList.filter(([k])=>types.has(k)).map(([k])=>k||'(sin tipo)').join(', '):'';
+    const res=processRows(S.rows,c,{from,to:toEff,byAuthor,types});
     S.res=res;S.groups=buildGroups(res.titles,S.level);
     if(c.copies>=0&&!looksLikeCount(S.rows,c.copies)){
       const cs=copiesStats(S.rows,c.copies);
@@ -598,7 +647,7 @@ function splitSheet(aoa,hdrRow){
     const r=S.res,st=r.stats;
     $('#dlBtn').disabled=!r.titles.length;
     $('#status').innerHTML=(S.sample?'<span class="sample-tag">Datos de ejemplo</span> ':esc(S.fileName)+' · hoja «'+esc(S.sheetName)+'» · ')+
-      fmt(st.rows)+' filas · '+fmt(st.withDewey)+' con Dewey válido · '+fmt(st.inRange)+' dentro de '+S.from+'–'+S.to;
+      fmt(st.rows)+' filas · '+(st.excludedType?fmt(st.excludedType)+' excluidas por tipo de recurso · ':'')+fmt(st.withDewey)+' con Dewey válido · '+fmt(st.inRange)+' dentro de '+S.from+'–'+S.to;
     const sm=summarize(r.titles);
     const k=(v,l)=>'<div class="kpi"><b>'+v+'</b><span>'+l+'</span></div>';
     $('#kpis').innerHTML=k(fmt(sm.titles),'títulos únicos')+k(fmt(sm.editions),'ediciones distintas')+k(fmt(sm.copies),'ejemplares')+
@@ -660,7 +709,7 @@ function splitSheet(aoa,hdrRow){
     if($('#inclOrig').checked) original={headers:S.headers,rows:S.res.keptIdx.map(i=>S.rows[i])};
     const date=new Date().toISOString().slice(0,10);
     const wb=buildWorkbook(XLSX,{titles:S.res.titles,groups:S.groups,summary:summarize(S.res.titles),stats:S.res.stats,levelName:S.levelName,
-      fileName:S.sample?'Datos de ejemplo':S.fileName,sheetName:S.sheetName,from:S.from,to:S.to,byAuthor:S.byAuthor,date,original});
+      fileName:S.sample?'Datos de ejemplo':S.fileName,sheetName:S.sheetName,from:S.from,to:S.to,byAuthor:S.byAuthor,date,original,typesText:S.typesText});
     XLSX.writeFile(wb,'Dewey_'+S.from+'-'+S.to+'_'+date+'.xlsx');
   }
 
@@ -676,7 +725,7 @@ function splitSheet(aoa,hdrRow){
       ['519.7','Investigación de operaciones','Taha, Hamdy A.'],['519.82','Procesos de decisión de Markov','Puterman, Martin L.'],['519.82','Teoría de la decisión','Raiffa, Howard'],
       ['004.6','Redes de computadoras','Tanenbaum, Andrew S.'],['005.13','Fundamentos de programación','Joyanes Aguilar, Luis'],['530.15','Métodos de física matemática','Arfken, George B.'],['020','Fundamentos de bibliotecología','Gorman, Michael']];
     const ys=[1979,1983,1987,1992,1996,1999,2003,2006,2009,2012,2015,2018,2021];
-    const out=[['N.º inventario','Título','Autor','Año de publicación','Mención de edición','Clasificación CDD']];
+    const out=[['N.º inventario','Título','Autor','Año de publicación','Mención de edición','Clasificación CDD','Tipo de recurso']];
     let inv=10000;
     for(const t of T){
       const ne=1+Math.floor(rnd()*4);const used=new Set();
@@ -706,6 +755,15 @@ function splitSheet(aoa,hdrRow){
   $('#sheetSel').addEventListener('change',e=>useSheet(+e.target.value));
   $('#hdrRow').addEventListener('input',()=>{clearTimeout(S.timer);S.timer=setTimeout(()=>{if(S.aoa.length) rebuildFromHeader(true);},250);});
   ['#selDewey','#selTitle','#selAuthor','#selYear','#selEdition','#selCopies','#from','#to','#inclOrig'].forEach(s=>$(s).addEventListener('input',schedule));
+  $('#selType').addEventListener('input',()=>{refreshTypes();schedule();});
+  $('#typeList').addEventListener('change',e=>{
+    const i=e.target.dataset.i;if(i===undefined) return;
+    const k=S.typeList[+i][0];
+    if(e.target.checked) S.typeSel.add(k); else S.typeSel.delete(k);
+    S.sel=null;drawTypes();schedule();
+  });
+  $('#typeAll').addEventListener('click',()=>{S.typeSel=new Set(S.typeList.map(x=>x[0]));S.sel=null;drawTypes();schedule();});
+  $('#typeNone').addEventListener('click',()=>{S.typeSel=new Set();S.sel=null;drawTypes();schedule();});
   document.querySelectorAll('input[name=uniq],input[name=level]').forEach(el=>el.addEventListener('change',()=>{S.sel=null;schedule();}));
   $('#search').addEventListener('input',()=>{if(S.res) renderTitles();});
   $('#dlBtn').addEventListener('click',download);
