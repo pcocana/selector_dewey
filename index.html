@@ -440,10 +440,10 @@ function buildWorkbook(XLSX,d){
     t1.push([t.deweyStr,t.title,t.author,t.editions.length,t.yearsText,t.copies,t.minYear===null?'':t.minYear,t.maxYear===null?'':t.maxYear]);
     for(const e of t.editions) t2.push([t.deweyStr,t.title,t.author,e.year===null?'':e.year,e.mention,e.copies]);
   }
-  const t3=[[d.levelName,'Descripción','Títulos únicos','Ediciones','Ejemplares','Ejemplares por título','Año promedio','Año mediano','Año mínimo','Año máximo']];
-  for(const g of d.groups) t3.push([g.label,g.name,g.titles,g.editions,g.copies,r1(g.perTitle),r1(g.avgYear),g.medYear===null?'':g.medYear,g.minYear===null?'':g.minYear,g.maxYear===null?'':g.maxYear]);
+  const t3=[[d.levelName,'Descripción','Títulos únicos','Ejemplares','Año promedio','Año mediano','Año mínimo','Año máximo']];
+  for(const g of d.groups) t3.push([g.label,g.name,g.titles,g.copies,r1(g.avgYear),g.medYear===null?'':g.medYear,g.minYear===null?'':g.minYear,g.maxYear===null?'':g.maxYear]);
   const sm=d.summary;
-  t3.push([]);t3.push(['Total','',sm.titles,sm.editions,sm.copies,sm.titles?r1(sm.copies/sm.titles):'',r1(sm.avgYear)]);
+  t3.push([]);t3.push(['Total','',sm.titles,sm.copies,r1(sm.avgYear)]);
   const t4=[['Parámetro','Valor'],
     ['Archivo',d.fileName],['Hoja',d.sheetName],['Rango Dewey',d.from+' a '+d.to],
     ['Título único por',d.byAuthor?'Título y autor':'Solo título'],
@@ -458,7 +458,7 @@ function buildWorkbook(XLSX,d){
     XLSX.utils.book_append_sheet(wb,ws,name);};
   add('Títulos únicos',t1,[10,60,28,10,34,11,12,12]);
   add('Ediciones',t2,[10,60,28,12,24,11]);
-  add('Resumen Dewey',t3,[10,44,12,10,11,12,12,11,10,10]);
+  add('Resumen Dewey',t3,[10,44,14,12,13,13,11,11]);
   add('Parámetros',t4,[40,48]);
   if(d.original){
     const ws=XLSX.utils.aoa_to_sheet([d.original.headers].concat(d.original.rows));
@@ -650,8 +650,8 @@ function splitSheet(aoa,hdrRow){
       fmt(st.rows)+' filas · '+(st.excludedType?fmt(st.excludedType)+' excluidas por tipo de recurso · ':'')+fmt(st.withDewey)+' con Dewey válido · '+fmt(st.inRange)+' dentro de '+S.from+'–'+S.to;
     const sm=summarize(r.titles);
     const k=(v,l)=>'<div class="kpi"><b>'+v+'</b><span>'+l+'</span></div>';
-    $('#kpis').innerHTML=k(fmt(sm.titles),'títulos únicos')+k(fmt(sm.editions),'ediciones distintas')+k(fmt(sm.copies),'ejemplares')+
-      k(sm.avgYear?Math.round(sm.avgYear):'–','año promedio')+k(sm.titles?(sm.copies/sm.titles).toFixed(1).replace('.',','):'–','ejemplares por título');
+    $('#kpis').innerHTML=k(fmt(sm.titles),'títulos únicos')+k(fmt(sm.copies),'ejemplares')+
+      k(sm.avgYear?Math.round(sm.avgYear):'–','año promedio');
     $('#grpTitle').textContent='Por '+S.levelName.toLowerCase()+' Dewey';
     renderGroups();renderDecades();renderTitles();
   }
@@ -659,11 +659,11 @@ function splitSheet(aoa,hdrRow){
   function renderGroups(){
     const gs=S.groups;if(!gs.length){$('#grpTbl').innerHTML='<tbody><tr><td>Sin resultados en este rango.</td></tr></tbody>';return;}
     const mt=Math.max(...gs.map(g=>g.titles)),mc=Math.max(...gs.map(g=>g.copies));
-    let h='<thead><tr><th>'+S.levelName+'</th><th>Descripción</th><th>Títulos</th><th>Ejemplares</th><th class="r">Ediciones</th><th class="r">Año prom.</th><th class="r">Mediana</th></tr></thead><tbody>';
+    let h='<thead><tr><th>'+S.levelName+'</th><th>Descripción</th><th>Títulos</th><th>Ejemplares</th><th class="r">Año prom.</th><th class="r">Mediana</th></tr></thead><tbody>';
     for(const g of gs){
       h+='<tr class="g'+(S.sel===g.key?' sel':'')+'" data-k="'+esc(g.key)+'"><td><button class="chip" type="button" data-k="'+esc(g.key)+'" aria-pressed="'+(S.sel===g.key)+'">'+esc(g.label)+'</button></td>'+
         '<td><span class="nm'+(g.generic?' gen':'')+'">'+esc(g.name||'Sin descripción')+'</span></td>'+
-        '<td>'+bar(g.titles,mt,'t')+'</td><td>'+bar(g.copies,mc,'c')+'</td><td class="r">'+fmt(g.editions)+'</td>'+
+        '<td>'+bar(g.titles,mt,'t')+'</td><td>'+bar(g.copies,mc,'c')+'</td>'+
         '<td class="r">'+(g.avgYear?Math.round(g.avgYear):'–')+'</td><td class="r">'+(g.medYear||'–')+'</td></tr>';
     }
     $('#grpTbl').innerHTML=h+'</tbody>';
@@ -693,10 +693,10 @@ function splitSheet(aoa,hdrRow){
     const LIM=250;
     $('#ttlCount').textContent=fmt(list.length)+' títulos'+(list.length>LIM?' · se muestran los primeros '+LIM+'; el Excel trae todos':'');
     if(!list.length){$('#ttlTbl').innerHTML='<tbody><tr><td>Sin títulos para mostrar.</td></tr></tbody>';return;}
-    let h='<thead><tr><th>Dewey</th><th>Título</th><th>Ediciones y años</th><th class="r">Ejemplares</th></tr></thead><tbody>';
+    let h='<thead><tr><th>Dewey</th><th>Título</th><th>Años de edición</th><th class="r">Ejemplares</th></tr></thead><tbody>';
     for(const t of list.slice(0,LIM)){
       h+='<tr><td><span class="chip plain">'+esc(t.deweyStr)+'</span></td><td class="ttl">'+esc(t.title)+(t.author?'<small>'+esc(t.author)+'</small>':'')+'</td>'+
-        '<td class="yrs"><b style="color:var(--ink);font-weight:500">'+t.editions.length+'</b> · '+esc(t.yearsText)+'</td><td class="r">'+fmt(t.copies)+'</td></tr>';
+        '<td class="yrs">'+esc(t.yearsText)+'</td><td class="r">'+fmt(t.copies)+'</td></tr>';
     }
     $('#ttlTbl').innerHTML=h+'</tbody>';
   }
